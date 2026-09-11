@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import boto3
 
@@ -38,3 +39,12 @@ def list_partitioned_objects(bucket: str, prefix: str, region_name: str = "us-ea
                 )
             )
     return objects
+
+
+def download_object(bucket: str, key: str, local_path: str | Path, region_name: str = "us-east-1") -> Path:
+    # Pulls one raw telemetry object down to a local path so it can be transformed.
+    client = boto3.client("s3", region_name=region_name)
+    destination = Path(local_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, key, str(destination))
+    return destination

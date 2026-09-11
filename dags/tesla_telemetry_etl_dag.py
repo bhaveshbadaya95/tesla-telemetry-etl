@@ -7,7 +7,7 @@ from pathlib import Path
 from airflow.decorators import dag, task
 
 from telemetry_etl.config import load_settings
-from telemetry_etl.extract import list_partitioned_objects
+from telemetry_etl.extract import download_object, list_partitioned_objects
 from telemetry_etl.load import (
     connect,
     copy_stage_to_staging,
@@ -54,16 +54,25 @@ def tesla_telemetry_etl():
         return [obj for obj in objects if obj["key"].endswith(".jsonl")]
 
     @task
-    def transform_local_sample(objects: list[dict]) -> dict[str, str]:
-        # Portfolio/local mode transforms sample data. Replace download logic here for production S3 files.
-        del objects
+    def download_and_transform(objects: list[dict]) -> dict[str, str]:
+        # Downloads every raw object found in S3 for this run, concatenates them
+        # (there is one file per ingestion batch today, but this scales to many),
+        # and transforms the combined JSONL into curated Parquet outputs.
+        if not objects:
+            raise ValueError("No S3 objects found under the configured prefix")
+        settings = load_settings()
         with tempfile.TemporaryDirectory() as temp_dir:
+            combined_path = Path(temp_dir) / "combined.jsonl"
+            with combined_path.open("w") as combined:
+                for obj in objects:
+                    local_path = Path(temp_dir) / "raw" / Path(obj["key"]).name
+                    download_object(obj["bucket"], obj["key"], local_path, settings.aws_region)
+                    text = local_path.read_text()
+                    combined.write(text if text.endswith("\n") else text + "\n")
+
             # Write first to a temporary folder so partial files do not look finished.
             output_dir = Path(temp_dir) / "curated"
-            written = write_curated_parquet(
-                "/opt/airflow/data/sample/tesla_telemetry_sample.jsonl",
-                output_dir,
-            )
+            written = write_curated_parquet(combined_path, output_dir)
             # Copy final Parquet files into a mounted project folder Airflow can reuse.
             durable_output = Path("/opt/airflow/build/curated")
             durable_output.mkdir(parents=True, exist_ok=True)
@@ -107,7 +116,7 @@ def tesla_telemetry_etl():
     # Define the task order shown in the Airflow graph.
     manifest = extract_s3_manifest()
     valid_manifest = validate_manifest(manifest)
-    curated = transform_local_sample(valid_manifest)
+    curated = download_and_transform(valid_manifest)
     load_to_snowflake(curated, valid_manifest)
 
 
