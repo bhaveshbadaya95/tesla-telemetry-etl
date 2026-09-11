@@ -28,6 +28,14 @@ This project simulates a production-style telemetry platform for Tesla-like conn
 
 It is designed as a portfolio-ready data engineering project that demonstrates cloud ingestion, orchestration, warehouse modeling, incremental loading, testing, CI, documentation, and local reproducibility.
 
+## Screenshots
+
+**Airflow DAG running end-to-end** (S3 extract → validate → download & transform → Snowflake load)
+![Airflow DAG graph](screenshots/01-airflow-dag-graph.png)
+
+**Curated data in Snowflake**
+![Snowflake curated data](screenshots/02-snowflake-curated-data.png)
+
 ## Architecture Diagram
 
 ```mermaid
@@ -58,7 +66,7 @@ flowchart TD
     start([DAG starts every 15 minutes])
     extract["extract_s3_manifest<br/>List files from S3 prefix"]
     validate["validate_manifest<br/>Keep valid .jsonl files"]
-    transform["transform_local_sample<br/>Validate and create Parquet outputs"]
+    transform["download_and_transform<br/>Download S3 objects, validate, create Parquet outputs"]
     load["load_to_snowflake<br/>Stage, copy, merge, track files"]
     done([Curated tables ready])
 
@@ -273,6 +281,15 @@ Current status:
 lint clean
 local ETL generates curated Parquet files
 ```
+
+## Notes from getting this running
+
+Running this end-to-end (real AWS S3 bucket, real Snowflake trial account, Airflow in Docker) surfaced a few real bugs:
+
+- **Parquet timestamp parsing**: the Snowflake `FILE FORMAT` for Parquet was missing `USE_LOGICAL_TYPE = TRUE`. Without it, Snowflake tried to parse the raw physical encoding of timezone-aware timestamp columns and failed with a garbled `Timestamp '(seconds_since_epoch=...)tz=...' is not recognized` error. Fixed in both the file format DDL and the inline `COPY INTO` file format override, since the latter takes precedence over the stage default.
+- **Duplicate rows on re-run**: `STAGING.*` tables were never truncated before loading. On a second load, `COPY INTO` re-appended the same rows, so the `MERGE` (matched on `event_id`) found two source rows for one target key and failed with "duplicate row detected." Staging is a landing zone for the current batch only, so it's now truncated before every load — this matters for a DAG that's designed to run every 15 minutes.
+- **Airflow admin user never created**: the `airflow-init` service's `command` was a YAML folded block scalar (`>`) with inconsistent indentation between lines. YAML preserves a literal newline for lines indented deeper than the block's base level instead of folding it into a space, so bash read `--firstname Air --lastname Flow ...` as a second, invalid command instead of continuing the `airflow users create` call. The admin user silently never got created, so login failed. Fixed by collapsing the command to one line.
+- **S3 listing was decorative**: the pipeline listed S3 objects to build a manifest but then always transformed a hardcoded local sample file regardless of what the manifest contained. `download_and_transform` now actually downloads every object the manifest finds and processes that.
 
 ## Documentation
 
