@@ -36,10 +36,7 @@ services:
       # Mount the whole project so Airflow can see dags, source code, data, and build output.
       - ./:/opt/airflow
     # Run database migrations, then create a local admin user if it does not already exist.
-    command: >
-      bash -c "airflow db migrate &&
-               airflow users create --username airflow --password airflow
-               --firstname Air --lastname Flow --role Admin --email airflow@example.com || true"
+    command: bash -c "airflow db migrate && airflow users create --username airflow --password airflow --firstname Air --lastname Flow --role Admin --email airflow@example.com || true"
 
   # This service runs the Airflow web UI at http://localhost:8080.
   airflow-webserver:
